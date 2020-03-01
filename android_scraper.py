@@ -108,13 +108,6 @@ class PdfOutput:
             if bookmark:
                 self.bookmark_page(bookmark_title, page_index)
 
-            # Temporary, for development
-            num_pages = self.writer.getNumPages()
-            print('now have ' + str(num_pages) + ' pages')
-            if num_pages > 100:
-                self.finish()
-                sys.exit(0)
-
     def append_pdf_to_output(self, file_name):
         '''
         Append the PDF file to the output, remember file to clean up
