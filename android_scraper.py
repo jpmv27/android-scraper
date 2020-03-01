@@ -6,33 +6,24 @@ Scrape complete Android documentation site to PDF
 
 import argparse
 import os
+import sys
 import time
 
 from bs4 import BeautifulSoup as bs
+from PyPDF2 import PdfFileReader, PdfFileWriter
 import requests
 
 # Use html5lib because html.parser makes a mess of malformed HTML
 PARSER = 'html5lib'
 
-class Options: # pylint: disable=too-few-public-methods
-    '''
-    Options
-    '''
 
-    delay = 1
-    debug = False
-    recover = False
-
-
-def read_page(url):
+def save_url_to_pdf(url, file_name):
     '''
-    Read page at URL
+    Save the URL to the specified PDF file
     '''
 
-    response = requests.get(url)
-    response.raise_for_status()
-
-    return bs(response.text, PARSER)
+    os.system('google-chrome --headless --print-to-pdf=' + \
+            file_name + ' ' + url + ' 2> /dev/null')
 
 
 def url_to_filename(url, extension):
@@ -48,29 +39,91 @@ def url_to_filename(url, extension):
     return name + extension
 
 
-def save_to_pdf(url):
+class PdfOutput:
     '''
-    Save the URL to a PDF
+    Save URLs to PDF and accumulate into one output file
     '''
 
-    if url.endswith('.pdf'):
-        return None
+    def __init__(self, file_name, *, delay=1, debug=False):
+        self.file_name = file_name
+        self.delay = delay
+        self.debug = debug
+        self.writer = PdfFileWriter()
+        self.files_to_clean_up = []
 
-    time.sleep(Options.delay)
+    def add(self, url):
+        '''
+        Add the URL to the PDF
+        '''
 
-    file_name = url_to_filename(url, '.pdf')
+        if url.endswith('.pdf'):
+            return
 
-    if Options.recover and \
-            os.path.exists(file_name):
-        return file_name
+        time.sleep(self.delay)
 
-    if Options.debug:
-        print('Saving ' + url + ' to ' + file_name)
-    else:
-        os.system('google-chrome --headless --print-to-pdf=' + \
-                file_name + ' ' + url + ' 2> /dev/null')
+        file_name = url_to_filename(url, '.pdf')
 
-    return file_name
+        if self.debug:
+            print('Saving ' + url + ' to ' + file_name)
+        else:
+            save_url_to_pdf(url, file_name)
+
+            num_pages = self.writer.getNumPages()
+            self.append_pdf_to_output(file_name)
+
+            self.writer.addBookmark(file_name, num_pages)
+            num_pages = self.writer.getNumPages()
+            print('now have ' + str(num_pages) + ' pages')
+            if num_pages > 100:
+                self.finish()
+                sys.exit(0)
+
+    def append_pdf_to_output(self, file_name):
+        '''
+        Append the PDF file to the output, remember file to clean up
+        '''
+
+        input_file = open(file_name, 'rb')
+        input_stream = PdfFileReader(input_file)
+        self.writer.appendPagesFromReader(input_stream)
+
+        self.files_to_clean_up.append(file_name)
+
+    def clean_up_files(self):
+        '''
+        Delete all the files to be cleaned-up
+        '''
+
+        for file in self.files_to_clean_up:
+            os.remove(file)
+
+    def finish(self):
+        '''
+        Wrap-up processing by writing the output file and cleaning-up
+        '''
+
+        self.write_output()
+        self.clean_up_files()
+
+    def write_output(self):
+        '''
+        Generate the output file
+        '''
+
+        output_file = open(self.file_name, 'wb')
+        self.writer.write(output_file)
+        output_file.close()
+
+
+def read_page(url):
+    '''
+    Read page at URL
+    '''
+
+    response = requests.get(url)
+    response.raise_for_status()
+
+    return bs(response.text, PARSER)
 
 
 def url_to_absolute(site_url, page_url):
@@ -84,7 +137,7 @@ def url_to_absolute(site_url, page_url):
     return site_url + page_url
 
 
-def scrape_side_menu_item(site_url, item):
+def scrape_side_menu_item(site_url, item, output):
     '''
     Scrape a chapter with sub-chapters, represented by an expandable
     side menu item
@@ -95,17 +148,17 @@ def scrape_side_menu_item(site_url, item):
 
     if 'devsite-nav-expandable' in item['class']:
         for subitem in item.find('ul').find_all('li', recursive=False):
-            scrape_side_menu_item(site_url, subitem)
+            scrape_side_menu_item(site_url, subitem, output)
         return
 
     # Sometimes the item doesn't really exist
     a_tag = item.find('a')
 
     if a_tag:
-        save_to_pdf(url_to_absolute(site_url, a_tag['href']))
+        output.add(url_to_absolute(site_url, a_tag['href']))
 
 
-def scrape_lower_tab(site_url, tab_url):
+def scrape_lower_tab(site_url, tab_url, output):
     '''
     Scrape a minor section, represented by a lower tab
 
@@ -124,13 +177,13 @@ def scrape_lower_tab(site_url, tab_url):
 
     if side_menu:
         for item in side_menu.find_all('li', recursive=False):
-            scrape_side_menu_item(site_url, item)
+            scrape_side_menu_item(site_url, item, output)
         return
 
-    save_to_pdf(url_to_absolute(site_url, tab_url))
+    output.add(url_to_absolute(site_url, tab_url))
 
 
-def scrape_upper_tab(site_url, tab_url):
+def scrape_upper_tab(site_url, tab_url, output):
     '''
     Scrape a major section, represented by an upper tab
 
@@ -144,26 +197,26 @@ def scrape_upper_tab(site_url, tab_url):
 
     if lower_tabs:
         for tab in lower_tabs.find_all('tab'):
-            scrape_lower_tab(site_url, tab.find('a')['href'])
+            scrape_lower_tab(site_url, tab.find('a')['href'], output)
         return
 
-    save_to_pdf(url_to_absolute(site_url, tab_url))
+    output.add(url_to_absolute(site_url, tab_url))
 
 
-def scrape_site(url):
+def scrape_site(url, output):
     '''
     Scrape the site
 
     Save the site main page, then iterate through all the upper tabs
     '''
 
-    save_to_pdf(url)
+    output.add(url)
 
     page = read_page(url)
 
     for tag in page.select('devsite-tabs.upper-tabs'):
         for tab in tag.find_all('tab'):
-            scrape_upper_tab(url, tab.find('a')['href'])
+            scrape_upper_tab(url, tab.find('a')['href'], output)
 
 
 def parse_command_line():
@@ -176,16 +229,8 @@ def parse_command_line():
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--delay', type=int, default=1, \
             metavar='DELAY', help='Delay in seconds between requests')
-    parser.add_argument('--recover', action='store_true', \
-            help='Recover from a previously interrupted session')
 
-    args = parser.parse_args()
-
-    Options.debug = args.debug
-    Options.delay = args.delay
-    Options.recover = args.recover
-
-    return args.url
+    return parser.parse_args()
 
 
 def main():
@@ -194,9 +239,13 @@ def main():
     '''
 
     try:
-        url = parse_command_line()
+        args = parse_command_line()
 
-        scrape_site(url)
+        output = PdfOutput('scraper.pdf', debug=args.debug, delay=args.delay)
+
+        scrape_site(args.url, output)
+
+        output.finish()
 
         print('Done')
 
