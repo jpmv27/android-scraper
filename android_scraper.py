@@ -333,6 +333,8 @@ def parse_command_line():
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--delay', type=int, default=1, \
             metavar='DELAY', help='Delay in seconds between requests')
+    parser.add_argument('-o', '--output', type=str, metavar='OUTPUT', \
+            default='scraper.pdf', help='Output file name')
 
     return parser.parse_args()
 
@@ -345,7 +347,7 @@ def main():
     try:
         args = parse_command_line()
 
-        output = PdfOutput('scraper.pdf', debug=args.debug, delay=args.delay)
+        output = PdfOutput(args.output, debug=args.debug, delay=args.delay)
 
         scrape_site(args.url, output)
 
