@@ -6,6 +6,7 @@ Scrape complete Android documentation site to PDF
 
 import argparse
 import os
+import resource
 import time
 
 from bs4 import BeautifulSoup as bs
@@ -361,6 +362,9 @@ def main():
         args = parse_command_line()
 
         output = PdfOutput(args.output, debug=args.debug, delay=args.delay)
+
+        # developer.android.com causes "too many open files" error
+        resource.setrlimit(resource.RLIMIT_NOFILE, (10000, 10000))
 
         scrape_site(args.url, output)
 
