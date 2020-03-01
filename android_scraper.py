@@ -6,7 +6,6 @@ Scrape complete Android documentation site to PDF
 
 import argparse
 import os
-import sys
 import time
 
 from bs4 import BeautifulSoup as bs
@@ -26,7 +25,7 @@ def save_url_to_pdf(url, file_name):
             file_name + ' ' + url + ' 2> /dev/null')
 
 
-def url_to_filename(url, extension):
+def url_to_filename(url):
     '''
     Convert URL to filename
     '''
@@ -36,7 +35,7 @@ def url_to_filename(url, extension):
     for char in '"!/. \'':
         name = name.replace(char, '_')
 
-    return name + extension
+    return name
 
 
 class PdfOutput:
@@ -92,7 +91,7 @@ class PdfOutput:
 
         time.sleep(self.delay)
 
-        file_name = url_to_filename(url, '.pdf')
+        file_name = self.make_unique_filename_ext(url_to_filename(url), '.pdf')
 
         if self.debug:
             print('Saving ' + url + ' to ' + file_name)
@@ -147,7 +146,8 @@ class PdfOutput:
 
         for bookmark in self.bookmark_stack:
             if bookmark.is_pending():
-                bookmark.set_ref(self.writer.addBookmark(bookmark.title, page_num, parent=parent))
+                bookmark.set_ref(self.writer.addBookmark( \
+                        bookmark.title, page_num, parent=parent))
             parent = bookmark.get_ref()
 
     def finish(self):
@@ -157,6 +157,22 @@ class PdfOutput:
 
         self.write_output()
         self.clean_up_files()
+
+    def make_unique_filename_ext(self, file_name, ext):
+        '''
+        Check a file name and extension for uniqueness and append
+        a suffix if necessary to make it unique
+        '''
+
+        suffix = 2
+
+        tentative_name = file_name
+
+        while tentative_name + ext in self.files_to_clean_up:
+            tentative_name = file_name + str(suffix)
+            suffix += 1
+
+        return tentative_name + ext
 
     def pop_heading(self):
         '''
@@ -184,11 +200,15 @@ class PdfOutput:
 
 
 def title_to_bookmark_title(title):
-    bar = title.find('|')
-    if not bar:
+    '''
+    Extract the bookmark name from a page title
+    '''
+
+    vertical_bar = title.find('|')
+    if not vertical_bar:
         return title
 
-    return title[:bar - 1].strip()
+    return title[:vertical_bar - 1].strip()
 
 
 def read_page(url):
