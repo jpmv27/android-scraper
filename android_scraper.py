@@ -44,14 +44,45 @@ class PdfOutput:
     Save URLs to PDF and accumulate into one output file
     '''
 
+    class Bookmark:
+        '''
+        Represents a bookmark for a heading
+        '''
+
+        def __init__(self, title):
+            self.title = title
+            self.pdf_ref = None
+
+        def get_ref(self):
+            '''
+            Return the bookmark reference
+            '''
+
+            return self.pdf_ref
+
+        def is_pending(self):
+            '''
+            Check whether the bookmark has been added or not
+            '''
+
+            return self.pdf_ref is None
+
+        def set_ref(self, ref):
+            '''
+            Update the bookmark reference
+            '''
+
+            self.pdf_ref = ref
+
     def __init__(self, file_name, *, delay=1, debug=False):
         self.file_name = file_name
         self.delay = delay
         self.debug = debug
         self.writer = PdfFileWriter()
         self.files_to_clean_up = []
+        self.bookmark_stack = []
 
-    def add(self, url):
+    def add_page(self, url, bookmark_title, *, bookmark=True):
         '''
         Add the URL to the PDF
         '''
@@ -68,10 +99,16 @@ class PdfOutput:
         else:
             save_url_to_pdf(url, file_name)
 
-            num_pages = self.writer.getNumPages()
+            page_index = self.writer.getNumPages()
+
             self.append_pdf_to_output(file_name)
 
-            self.writer.addBookmark(file_name, num_pages)
+            self.create_pending_bookmarks(page_index)
+
+            if bookmark:
+                self.bookmark_page(bookmark_title, page_index)
+
+            # Temporary, for development
             num_pages = self.writer.getNumPages()
             print('now have ' + str(num_pages) + ' pages')
             if num_pages > 100:
@@ -89,6 +126,17 @@ class PdfOutput:
 
         self.files_to_clean_up.append(file_name)
 
+    def bookmark_page(self, title, page_num):
+        '''
+        Bookmark the page
+        '''
+
+        parent = None
+        if self.bookmark_stack:
+            parent = self.bookmark_stack[-1].get_ref()
+
+        self.writer.addBookmark(title, page_num, parent=parent)
+
     def clean_up_files(self):
         '''
         Delete all the files to be cleaned-up
@@ -96,6 +144,18 @@ class PdfOutput:
 
         for file in self.files_to_clean_up:
             os.remove(file)
+
+    def create_pending_bookmarks(self, page_num):
+        '''
+        Create heading bookmarks that have not yet been created
+        '''
+
+        parent = None
+
+        for bookmark in self.bookmark_stack:
+            if bookmark.is_pending():
+                bookmark.set_ref(self.writer.addBookmark(bookmark.title, page_num, parent=parent))
+            parent = bookmark.get_ref()
 
     def finish(self):
         '''
@@ -105,6 +165,21 @@ class PdfOutput:
         self.write_output()
         self.clean_up_files()
 
+    def pop_heading(self):
+        '''
+        Outdent subsequent bookmarks
+        '''
+
+        self.bookmark_stack.pop()
+
+    def push_heading(self, bookmark_title):
+        '''
+        Add a heading and make subsequent bookmarks a child of
+        this heading
+        '''
+
+        self.bookmark_stack.append(self.Bookmark(bookmark_title))
+
     def write_output(self):
         '''
         Generate the output file
@@ -113,6 +188,14 @@ class PdfOutput:
         output_file = open(self.file_name, 'wb')
         self.writer.write(output_file)
         output_file.close()
+
+
+def title_to_bookmark_title(title):
+    bar = title.find('|')
+    if not bar:
+        return title
+
+    return title[:bar - 1].strip()
 
 
 def read_page(url):
@@ -146,25 +229,34 @@ def scrape_side_menu_item(site_url, item, output):
     there are no sub-items
     '''
 
-    if 'devsite-nav-expandable' in item['class']:
-        for subitem in item.find('ul').find_all('li', recursive=False):
-            scrape_side_menu_item(site_url, subitem, output)
+    if 'devsite-nav-heading' in item['class']:
+        # TODO
         return
 
-    # Sometimes the item doesn't really exist
+    if 'devsite-nav-expandable' in item['class']:
+        nav_text = item.select_one('span.devsite-nav-text')
+        output.push_heading(nav_text.text.strip())
+        for subitem in item.find('ul').find_all('li', recursive=False):
+            scrape_side_menu_item(site_url, subitem, output)
+        output.pop_heading()
+        return
+
     a_tag = item.find('a')
 
-    if a_tag:
-        output.add(url_to_absolute(site_url, a_tag['href']))
+    output.add_page(url_to_absolute(site_url, a_tag['href']), \
+            a_tag.text.strip())
 
 
-def scrape_lower_tab(site_url, tab_url, output):
+def scrape_lower_tab(site_url, tab, output):
     '''
     Scrape a minor section, represented by a lower tab
 
     Iterate through the chapters in the side menu, or save the lower
     tab page if there is no side menu. Side menu items may be nested
     '''
+
+    a_tag = tab.find('a')
+    tab_url = a_tag['href']
 
     page = read_page(url_to_absolute(site_url, tab_url))
 
@@ -176,14 +268,17 @@ def scrape_lower_tab(site_url, tab_url, output):
         side_menu = None
 
     if side_menu:
+        output.push_heading(a_tag.text.strip())
         for item in side_menu.find_all('li', recursive=False):
             scrape_side_menu_item(site_url, item, output)
+        output.pop_heading()
         return
 
-    output.add(url_to_absolute(site_url, tab_url))
+    output.add_page(url_to_absolute(site_url, tab_url), \
+            title_to_bookmark_title(page.title.string))
 
 
-def scrape_upper_tab(site_url, tab_url, output):
+def scrape_upper_tab(site_url, tab, output):
     '''
     Scrape a major section, represented by an upper tab
 
@@ -191,16 +286,22 @@ def scrape_upper_tab(site_url, tab_url, output):
     if there are no lower tabs
     '''
 
+    a_tag = tab.find('a')
+    tab_url = a_tag['href']
+
     page = read_page(url_to_absolute(site_url, tab_url))
 
     lower_tabs = page.select_one('devsite-tabs.lower-tabs')
 
     if lower_tabs:
-        for tab in lower_tabs.find_all('tab'):
-            scrape_lower_tab(site_url, tab.find('a')['href'], output)
+        output.push_heading(a_tag.text.strip())
+        for lower_tab in lower_tabs.find_all('tab'):
+            scrape_lower_tab(site_url, lower_tab, output)
+        output.pop_heading()
         return
 
-    output.add(url_to_absolute(site_url, tab_url))
+    output.add_page(url_to_absolute(site_url, tab_url), \
+            title_to_bookmark_title(page.title.string))
 
 
 def scrape_site(url, output):
@@ -210,14 +311,17 @@ def scrape_site(url, output):
     Save the site main page, then iterate through all the upper tabs
     '''
 
-    output.add(url)
-
     page = read_page(url)
+
+    output.push_heading(page.title.string.strip())
+
+    output.add_page(url, url, bookmark=False)
 
     for tag in page.select('devsite-tabs.upper-tabs'):
         for tab in tag.find_all('tab'):
-            scrape_upper_tab(url, tab.find('a')['href'], output)
+            scrape_upper_tab(url, tab, output)
 
+    output.pop_heading()
 
 def parse_command_line():
     '''
