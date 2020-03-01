@@ -24,6 +24,17 @@ class Options: # pylint: disable=too-few-public-methods
     recover = False
 
 
+def read_page(url):
+    '''
+    Read page at URL
+    '''
+
+    response = requests.get(url)
+    response.raise_for_status()
+
+    return bs(response.text, PARSER)
+
+
 def url_to_filename(url, extension):
     '''
     Convert URL to filename
@@ -43,7 +54,7 @@ def save_to_pdf(url):
     '''
 
     if url.endswith('.pdf'):
-        return
+        return None
 
     time.sleep(Options.delay)
 
@@ -51,14 +62,15 @@ def save_to_pdf(url):
 
     if Options.recover and \
             os.path.exists(file_name):
-        print('Skipping ' + url)
-        return
+        return file_name
 
     if Options.debug:
         print('Saving ' + url + ' to ' + file_name)
     else:
         os.system('google-chrome --headless --print-to-pdf=' + \
                 file_name + ' ' + url + ' 2> /dev/null')
+
+    return file_name
 
 
 def url_to_absolute(site_url, page_url):
@@ -72,90 +84,123 @@ def url_to_absolute(site_url, page_url):
     return site_url + page_url
 
 
+def scrape_side_menu_item(site_url, item):
+    '''
+    Scrape a chapter with sub-chapters, represented by an expandable
+    side menu item
+
+    Iterate through the chapters in the item, or save the item if
+    there are no sub-items
+    '''
+
+    if 'devsite-nav-expandable' in item['class']:
+        for subitem in item.find('ul').find_all('li', recursive=False):
+            scrape_side_menu_item(site_url, subitem)
+        return
+
+    # Sometimes the item doesn't really exist
+    a_tag = item.find('a')
+
+    if a_tag:
+        save_to_pdf(url_to_absolute(site_url, a_tag['href']))
+
+
 def scrape_lower_tab(site_url, tab_url):
     '''
     Scrape a minor section, represented by a lower tab
+
+    Iterate through the chapters in the side menu, or save the lower
+    tab page if there is no side menu. Side menu items may be nested
     '''
 
-    response = requests.get(url_to_absolute(site_url, tab_url))
-    response.raise_for_status()
+    page = read_page(url_to_absolute(site_url, tab_url))
 
-    doc = bs(response.text, PARSER)
+    tag = page.select_one('nav.devsite-book-nav')
 
-    tag = doc.select_one('nav.devsite-book-nav')
     if tag:
-        inner_tag = tag.select_one('ul.devsite-nav-list[menu="_book"]')
+        side_menu = tag.select_one('ul.devsite-nav-list[menu="_book"]')
     else:
-        inner_tag = None
+        side_menu = None
 
-    if not inner_tag:
-        save_to_pdf(url_to_absolute(site_url, tab_url))
-    else:
-        for item in inner_tag.find_all('li'):
-            if 'devsite-nav-expandable' not in item['class']:
-                a_tag = item.find('a')
-                if a_tag:
-                    save_to_pdf(url_to_absolute(site_url, a_tag['href']))
+    if side_menu:
+        for item in side_menu.find_all('li', recursive=False):
+            scrape_side_menu_item(site_url, item)
+        return
+
+    save_to_pdf(url_to_absolute(site_url, tab_url))
 
 
 def scrape_upper_tab(site_url, tab_url):
     '''
     Scrape a major section, represented by an upper tab
+
+    Iterate through all the lower tabs, or save the upper tab page
+    if there are no lower tabs
     '''
 
-    response = requests.get(url_to_absolute(site_url, tab_url))
-    response.raise_for_status()
+    page = read_page(url_to_absolute(site_url, tab_url))
 
-    doc = bs(response.text, PARSER)
+    lower_tabs = page.select_one('devsite-tabs.lower-tabs')
 
-    lower_tabs = doc.select_one('devsite-tabs.lower-tabs')
-    if not lower_tabs:
-        save_to_pdf(url_to_absolute(site_url, tab_url))
-    else:
+    if lower_tabs:
         for tab in lower_tabs.find_all('tab'):
             scrape_lower_tab(site_url, tab.find('a')['href'])
+        return
+
+    save_to_pdf(url_to_absolute(site_url, tab_url))
 
 
 def scrape_site(url):
     '''
     Scrape the site
+
+    Save the site main page, then iterate through all the upper tabs
     '''
 
     save_to_pdf(url)
 
-    response = requests.get(url)
-    response.raise_for_status()
+    page = read_page(url)
 
-    doc = bs(response.text, PARSER)
-
-    for tag in doc.select('devsite-tabs.upper-tabs'):
+    for tag in page.select('devsite-tabs.upper-tabs'):
         for tab in tag.find_all('tab'):
             scrape_upper_tab(url, tab.find('a')['href'])
 
 
+def parse_command_line():
+    '''
+    Parse the command line and save options
+    '''
+
+    parser = argparse.ArgumentParser('Scrape an android.com site to PDF')
+    parser.add_argument('url', type=str, metavar='URL')
+    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--delay', type=int, default=1, \
+            metavar='DELAY', help='Delay in seconds between requests')
+    parser.add_argument('--recover', action='store_true', \
+            help='Recover from a previously interrupted session')
+
+    args = parser.parse_args()
+
+    Options.debug = args.debug
+    Options.delay = args.delay
+    Options.recover = args.recover
+
+    return args.url
+
+
 def main():
     '''
-    Parse arguments and initiate scraping
+    Parse arguments and perform scraping
     '''
 
     try:
-        parser = argparse.ArgumentParser('Scrape an android.com site to PDF')
-        parser.add_argument('url', type=str, metavar='URL')
-        parser.add_argument('--debug', action='store_true')
-        parser.add_argument('--delay', type=int, default=1, \
-                metavar='DELAY', help='Delay in seconds between requests')
-        parser.add_argument('--recover', action='store_true', \
-                help='Recover from a previously interrupted session')
-        args = parser.parse_args()
+        url = parse_command_line()
 
-        Options.debug = args.debug
-        Options.delay = args.delay
-        Options.recover = args.recover
+        scrape_site(url)
 
-        scrape_site(args.url)
+        print('Done')
 
-        print('done')
     except KeyboardInterrupt:
-        print('cancelled')
+        print('Cancelled')
 
 main()
