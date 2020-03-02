@@ -144,7 +144,8 @@ class PdfOutput:
         for bookmark in self.bookmark_stack:
             if bookmark.is_pending():
                 bookmark.pdf_ref = self.writer.addBookmark( \
-                        bookmark.title, page_num, parent=parent)
+                        bookmark.title, page_num, parent=parent, \
+                        italic=not bookmark.indent)
             if bookmark.indent:
                 parent = bookmark.pdf_ref
 
