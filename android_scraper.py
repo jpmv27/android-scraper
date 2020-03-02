@@ -45,21 +45,15 @@ class PdfOutput:
     Save URLs to PDF and accumulate into one output file
     '''
 
-    class Bookmark:
+    class Bookmark: # pylint: disable=too-few-public-methods
         '''
         Represents a bookmark for a heading
         '''
 
-        def __init__(self, title):
+        def __init__(self, title, *, indent=True):
             self.title = title
             self.pdf_ref = None
-
-        def get_ref(self):
-            '''
-            Return the bookmark reference
-            '''
-
-            return self.pdf_ref
+            self.indent = indent
 
         def is_pending(self):
             '''
@@ -68,20 +62,20 @@ class PdfOutput:
 
             return self.pdf_ref is None
 
-        def set_ref(self, ref):
-            '''
-            Update the bookmark reference
-            '''
-
-            self.pdf_ref = ref
-
-    def __init__(self, file_name, *, delay=1, debug=False):
+    def __init__(self, file_name, *, delay=1, no_exec=False):
         self.file_name = file_name
         self.delay = delay
-        self.debug = debug
+        self.no_exec = no_exec
         self.writer = PdfFileWriter()
         self.files_to_clean_up = []
         self.bookmark_stack = []
+
+    def add_heading(self, bookmark_title):
+        '''
+        Add a heading
+        '''
+
+        self.bookmark_stack.append(self.Bookmark(bookmark_title, indent=False))
 
     def add_page(self, url, bookmark_title, *, bookmark=True):
         '''
@@ -95,8 +89,9 @@ class PdfOutput:
 
         file_name = self.make_unique_filename_ext(url_to_filename(url), '.pdf')
 
-        if self.debug:
-            print('Saving ' + url + ' to ' + file_name)
+        if self.no_exec:
+            print('Adding page', url)
+
         else:
             save_url_to_pdf(url, file_name)
 
@@ -127,7 +122,7 @@ class PdfOutput:
 
         parent = None
         if self.bookmark_stack:
-            parent = self.bookmark_stack[-1].get_ref()
+            parent = self.bookmark_stack[-1].pdf_ref
 
         self.writer.addBookmark(title, page_num, parent=parent)
 
@@ -148,17 +143,19 @@ class PdfOutput:
 
         for bookmark in self.bookmark_stack:
             if bookmark.is_pending():
-                bookmark.set_ref(self.writer.addBookmark( \
-                        bookmark.title, page_num, parent=parent))
-            parent = bookmark.get_ref()
+                bookmark.pdf_ref = self.writer.addBookmark( \
+                        bookmark.title, page_num, parent=parent)
+            if bookmark.indent:
+                parent = bookmark.pdf_ref
 
     def finish(self):
         '''
         Wrap-up processing by writing the output file and cleaning-up
         '''
 
-        self.write_output()
-        self.clean_up_files()
+        if not self.no_exec:
+            self.write_output()
+            self.clean_up_files()
 
     def make_unique_filename_ext(self, file_name, ext):
         '''
@@ -182,6 +179,10 @@ class PdfOutput:
         '''
 
         self.bookmark_stack.pop()
+
+        while self.bookmark_stack and \
+                (not self.bookmark_stack[-1].indent):
+            self.bookmark_stack.pop()
 
     def push_heading(self, bookmark_title):
         '''
@@ -245,7 +246,8 @@ def scrape_side_menu_item(site_url, item, output):
     '''
 
     if 'devsite-nav-heading' in item['class']:
-        # TODO
+        nav_text = item.select_one('span.devsite-nav-text')
+        output.add_heading(nav_text.text.strip())
         return
 
     if 'devsite-nav-expandable' in item['class']:
@@ -345,11 +347,12 @@ def parse_command_line():
 
     parser = argparse.ArgumentParser('Scrape an android.com site to PDF')
     parser.add_argument('url', type=str, metavar='URL')
-    parser.add_argument('--debug', action='store_true')
-    parser.add_argument('--delay', type=int, default=1, \
-            metavar='DELAY', help='Delay in seconds between requests')
     parser.add_argument('-o', '--output', type=str, metavar='OUTPUT', \
-            default='scraper.pdf', help='Output file name')
+            default='scraper.pdf', help='output file name')
+    parser.add_argument('--delay', type=int, default=1, \
+            metavar='DELAY', help='delay in seconds between requests')
+    parser.add_argument('-N', '--no-exec', action='store_true', \
+            help="don't execute, just show what would be done")
 
     return parser.parse_args()
 
@@ -362,7 +365,7 @@ def main():
     try:
         args = parse_command_line()
 
-        output = PdfOutput(args.output, debug=args.debug, delay=args.delay)
+        output = PdfOutput(args.output, no_exec=args.no_exec, delay=args.delay)
 
         # developer.android.com causes "too many open files" error
         resource.setrlimit(resource.RLIMIT_NOFILE, (10000, 10000))
