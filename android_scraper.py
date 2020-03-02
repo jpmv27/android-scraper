@@ -7,6 +7,7 @@ Scrape complete Android documentation site to PDF
 import argparse
 import os
 import resource
+import subprocess
 import time
 
 from bs4 import BeautifulSoup as bs
@@ -22,8 +23,8 @@ def save_url_to_pdf(url, file_name):
     Save the URL to the specified PDF file
     '''
 
-    os.system('google-chrome --headless --print-to-pdf=' + \
-            file_name + ' ' + url + ' 2> /dev/null')
+    subprocess.run(('google-chrome', '--headless', '--print-to-pdf=' + \
+            file_name, url), stderr=subprocess.DEVNULL, check=True)
 
 
 def url_to_filename(url):
