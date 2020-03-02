@@ -33,7 +33,7 @@ def url_to_filename(url):
 
     name = url[url.find('//') + 2:]
 
-    for char in '"!/. \'':
+    for char in '"!/. ?=:\'':
         name = name.replace(char, '_')
 
     return name
