@@ -19,12 +19,27 @@ import requests
 PARSER = 'html5lib'
 
 
+def remove_wayback_header(url):
+    '''
+    If the URL is a Wayback Machine URL, modify the URL to hide the
+    Wayback Machine toolbar
+    '''
+
+    if not url.find('web.archive.org'):
+        return url
+
+    spot = url.find('/http')
+
+    return url[:spot] + 'if_' + url[spot:]
+
+
 def save_url_to_pdf(url, file_name):
     '''
     Save the URL to the specified PDF file
     '''
 
-    print('saving', url, 'to', file_name)
+    url = remove_wayback_header(url)
+
     subprocess.run(('google-chrome', '--headless', '--print-to-pdf=' + \
             file_name, url), stderr=subprocess.DEVNULL, check=True)
 
