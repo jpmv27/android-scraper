@@ -9,6 +9,7 @@ import os
 import resource
 import subprocess
 import time
+from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup as bs
 from PyPDF2 import PdfFileReader, PdfFileWriter
@@ -23,6 +24,7 @@ def save_url_to_pdf(url, file_name):
     Save the URL to the specified PDF file
     '''
 
+    print('saving', url, 'to', file_name)
     subprocess.run(('google-chrome', '--headless', '--print-to-pdf=' + \
             file_name, url), stderr=subprocess.DEVNULL, check=True)
 
@@ -231,10 +233,7 @@ def url_to_absolute(site_url, page_url):
     Resolve page URL to absolute URL if relative
     '''
 
-    if page_url.startswith('http'):
-        return page_url
-
-    return site_url + page_url
+    return urljoin(site_url, page_url)
 
 
 def scrape_side_menu_item(site_url, item, output):
